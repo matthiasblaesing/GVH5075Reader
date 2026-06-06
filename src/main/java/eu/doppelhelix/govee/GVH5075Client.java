@@ -195,7 +195,7 @@ public class GVH5075Client implements AutoCloseable {
             LOG.log(Level.DEBUG, () -> "Sending TX1: " + HexFormat.ofDelimiter(" ").formatHex(tx1));
             Future<Object> result = authNotifyListener.getNextValue();
             authWriteCharacteristic.WriteValue(encryptedTx1, Map.of("type", new Variant<>("command")));
-            byte[] rx1 = pskEncryption.decrypt(toByteArray((List<Byte>) result.get()));
+            byte[] rx1 = pskEncryption.decrypt(toByteArray(result.get()));
             LOG.log(Level.DEBUG, () -> "Received as RX1: " + HexFormat.ofDelimiter(" ").formatHex(rx1));
             if(rx1[0] != ((byte) 0xE7) || rx1[1] != ((byte) 0x01)) {
                 throw new IllegalStateException("Encryption Handshake failed");
@@ -204,7 +204,7 @@ public class GVH5075Client implements AutoCloseable {
             LOG.log(Level.DEBUG, () -> "Sending TX2: " + HexFormat.ofDelimiter(" ").formatHex(tx2));
             result = authNotifyListener.getNextValue();
             authWriteCharacteristic.WriteValue(encryptedTx2, Map.of("type", new Variant<>("command")));
-            byte[] rx2 = pskEncryption.decrypt(toByteArray((List<Byte>) result.get()));
+            byte[] rx2 = pskEncryption.decrypt(toByteArray(result.get()));
             LOG.log(Level.DEBUG, () -> "Received as RX1: " + HexFormat.ofDelimiter(" ").formatHex(rx2));
             if (rx2[0] != ((byte) 0xE7) || rx2[1] != ((byte) 0x02)) {
                 throw new IllegalStateException("Encryption Handshake failed (2)");
@@ -284,10 +284,7 @@ public class GVH5075Client implements AutoCloseable {
         Future<Object> result = commandValueListener.getNextValue();
         sendCommand(commandCharacteristic, REQUEST_CURRENT_MEASUREMENT);
         Object res = result.get(5, TimeUnit.SECONDS);
-        byte[] measurement = null;
-        if (res instanceof List l && !l.isEmpty() && l.get(0) instanceof Byte) {
-            measurement = decrypt(toByteArray((List<Byte>) l));
-        }
+        byte[] measurement = decrypt(toByteArray(res));
         checkResult(REQUEST_CURRENT_MEASUREMENT, measurement);
         return Measurement.fromData(measurement);
     }
@@ -305,24 +302,21 @@ public class GVH5075Client implements AutoCloseable {
                     int end = i;
                     Future<Object> result = commandValueListener.getNextValue();
                     dataValueListener.startBuffering();
-                    sendCommand(commandCharacteristic, new byte[]{0x33, 0x01, (byte) (0xFF & (start >> 8)), (byte) (0xFF & start), (byte) (0xFF & (end >> 8)), (byte) (0xFF & end)});
+                    sendCommand(commandCharacteristic, REQUEST_HISTORIC_MEASUREMENTS, new byte[]{(byte) (0xFF & (start >> 8)), (byte) (0xFF & start), (byte) (0xFF & (end >> 8)), (byte) (0xFF & end)});
                     Object res = result.get(5, TimeUnit.SECONDS);
                     result = commandValueListener.getNextValue();
 
                     OffsetDateTime odt = OffsetDateTime.now();
                     res = result.get(10, TimeUnit.SECONDS);
-                    int expectedCount = 0;
-                    if (res instanceof List l && (!l.isEmpty()) && l.get(0) instanceof Byte) {
-                        byte[] data = decrypt(toByteArray((List<Byte>) l));
-                        expectedCount = ByteBuffer.wrap(data, 2, 2).getShort();
-                    }
+                    byte[] data = decrypt(toByteArray(res));
+                    int expectedCount = expectedCount = ByteBuffer.wrap(data, 2, 2).getShort();
 
                     List<Object> resultData = dataValueListener.getBufferAndClear();
                     if (resultData.size() != expectedCount) {
                         throw new IllegalStateException("Got: " + resultData.size() + " / " + expectedCount);
                     }
                     resultData.forEach(c -> {
-                        byte[] row = decrypt(toByteArray((List<Byte>) c));
+                        byte[] row = decrypt(toByteArray(c));
                         measurements.addAll(HistoryMeasurement.fromData(odt, row));
                     });
                     break;
@@ -356,7 +350,7 @@ public class GVH5075Client implements AutoCloseable {
             Future<Object> result = deviceValueListener.getNextValue();
             sendCommand(deviceCharacteristic, command);
             try {
-                byte[] res = decrypt(toByteArray((List<Byte>) result.get(5, TimeUnit.SECONDS)));
+                byte[] res = decrypt(toByteArray(result.get(5, TimeUnit.SECONDS)));
                 checkResult(command, res);
                 return res;
             } catch (TimeoutException ex) {
@@ -396,7 +390,7 @@ public class GVH5075Client implements AutoCloseable {
     private void sendUpdate(byte[] command, byte[] argument) throws InterruptedException, ExecutionException, TimeoutException {
         Future<Object> result = deviceValueListener.getNextValue();
         sendCommand(deviceCharacteristic, command, argument);
-        byte[] res = decrypt(toByteArray((List<Byte>) result.get(5, TimeUnit.SECONDS)));
+        byte[] res = decrypt(toByteArray(result.get(5, TimeUnit.SECONDS)));
         checkResult(command, res);
     }
 

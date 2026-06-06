@@ -43,11 +43,22 @@ public class Util {
         return result;
     }
 
-    static byte[] toByteArray(List<Byte> input) {
-        byte[] result = new byte[input.size()];
-        for (int i = 0; i < input.size(); i++) {
-            result[i] = input.get(i);
+    static byte[] toByteArray(Object inputObj) {
+        if (inputObj instanceof List inputList) {
+            if(inputList.isEmpty()) {
+                return new byte[0];
+            } else if (inputList.get(0) instanceof Byte) {
+                List<Byte> input = (List<Byte>) inputList;
+                byte[] result = new byte[input.size()];
+                for (int i = 0; i < input.size(); i++) {
+                    result[i] = input.get(i);
+                }
+                return result;
+            } else {
+                throw new IllegalArgumentException("Input list does not contain bytes: " + inputList);
+            }
+        } else {
+            throw new IllegalArgumentException("Input is not a list: " + inputObj);
         }
-        return result;
     }
 }
