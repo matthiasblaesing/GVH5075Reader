@@ -24,6 +24,7 @@ package eu.doppelhelix.govee;
 import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -55,11 +56,28 @@ public class GVH5075Client implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(GVH5075Client.class.getName());
 
     private static final String BLUEZ_BUSNAME = "org.bluez";
+    private static final String UUID_SVC_GENERIC_ACCESS = "00001800-0000-1000-8000-00805f9b34fb";
+    private static final String UUID_SVC_GOVEE_DATA = "494e5445-4c4c-495f-524f-434b535f4857";
     private static final String UUID_NAME = "00002a00-0000-1000-8000-00805f9b34fb";
     private static final String UUID_DEVICE = "494e5445-4c4c-495f-524f-434b535f2011";
     private static final String UUID_COMMAND = "494e5445-4c4c-495f-524f-434b535f2012";
     private static final String UUID_DATA = "494e5445-4c4c-495f-524f-434b535f2013";
-    private static final Set<String> REQUIRED_CHARACTERISTICS = Set.of(UUID_NAME, UUID_DEVICE, UUID_COMMAND, UUID_DATA);
+    private static final String UUID_SVC_GOVEE_AUTH = "00010203-0405-0607-0809-0a0b0c0d1910";
+    private static final String UUID_AUTH_NOTIFY = "00010203-0405-0607-0809-0a0b0c0d2b10";
+    private static final String UUID_AUTH_WRITE = "00010203-0405-0607-0809-0a0b0c0d2b11";
+    private static final String UUID_AUTH_CONFIG = "00010203-0405-0607-0809-0a0b0c0d2b12";
+    private static final CharAddr ADDR_NAME = new CharAddr(UUID_SVC_GENERIC_ACCESS, UUID_NAME);
+    private static final CharAddr ADDR_DEVICE = new CharAddr(UUID_SVC_GOVEE_DATA, UUID_DEVICE);
+    private static final CharAddr ADDR_COMMAND = new CharAddr(UUID_SVC_GOVEE_DATA, UUID_COMMAND);
+    private static final CharAddr ADDR_DATA = new CharAddr(UUID_SVC_GOVEE_DATA, UUID_DATA);
+    private static final CharAddr ADDR_AUTH_NOTIFY = new CharAddr(UUID_SVC_GOVEE_AUTH, UUID_AUTH_NOTIFY);
+    private static final CharAddr ADDR_AUTH_WRITE = new CharAddr(UUID_SVC_GOVEE_AUTH, UUID_AUTH_WRITE);
+    private static final CharAddr ADDR_AUTH_CONFIG = new CharAddr(UUID_SVC_GOVEE_AUTH, UUID_AUTH_CONFIG);
+    private static final Set<CharAddr> REQUIRED_CHARACTERISTICS = Set.of(
+            ADDR_NAME,
+            ADDR_DEVICE, ADDR_COMMAND, ADDR_DATA /*,
+            ADDR_AUTH_NOTIFY, ADDR_AUTH_WRITE, ADDR_AUTH_CONFIG - the authentication characteristics are required on new Endpoints */
+    );
 
     private static final byte[] REQUEST_CURRENT_MEASUREMENT = new byte[]{(byte) 0xaa, (byte) 0x01};
     private static final byte[] REQUEST_HISTORIC_MEASUREMENTS = new byte[]{(byte) 0x33, (byte) 0x01};
@@ -78,6 +96,10 @@ public class GVH5075Client implements AutoCloseable {
     private static final byte[] SEND_OFFSET_HUMIDTY = new byte[]{(byte) 0x33, (byte) 0x06};
     private static final byte[] SEND_OFFSET_TEMPERATURE = new byte[]{(byte) 0x33, (byte) 0x07};
 
+    // the PSK is used for the initial handshake, which results in a session
+    // key that is ued for the further communication
+    private static final byte[] PSK = "MakingLifeSmarte".getBytes(StandardCharsets.US_ASCII);
+
     private final DBusConnection connection;
     private final Device1 dev;
     private final GattCharacteristic1 deviceCharacteristic;
@@ -90,8 +112,9 @@ public class GVH5075Client implements AutoCloseable {
     private final AutoCloseable dataValueListenerRegistration;
     private final ValueListener commandValueListener = new ValueListener("COMMAND");
     private final AutoCloseable commandValueListenerRegistration;
+    private final EncryptionHelper connectionEncryption;
 
-    public GVH5075Client(DBusConnection connection, DBusPath path) throws DBusException, InterruptedException {
+    public GVH5075Client(DBusConnection connection, DBusPath path) throws DBusException, InterruptedException, Exception {
         this.connection = connection;
 
         this.dev = connection.getRemoteObject(BLUEZ_BUSNAME, path, Device1.class);
@@ -100,12 +123,13 @@ public class GVH5075Client implements AutoCloseable {
 
         ObjectManager objectManager = connection.getRemoteObject(BLUEZ_BUSNAME, "/", ObjectManager.class);
 
-        Map<String, GattCharacteristic1> deviceCharacteristics = new HashMap<>();
+        Map<CharAddr, GattCharacteristic1> deviceCharacteristics = new HashMap<>();
         for (int i = 0; i < 2000; i++) {
             Map<DBusPath, Map<String, Map<String, Variant<?>>>> objects = objectManager.GetManagedObjects();
             for (Map.Entry<DBusPath, Map<String, Map<String, Variant<?>>>> e : objects.entrySet()) {
                 if (e.getValue().containsKey(GattCharacteristic1.class.getName())) {
-                    DBusPath servicePath = (DBusPath) e.getValue().get(GattCharacteristic1.class.getName()).get("Service").getValue();
+                    Map<String, Variant<?>> characteristicsData = e.getValue().get(GattCharacteristic1.class.getName());
+                    DBusPath servicePath = (DBusPath) characteristicsData.get("Service").getValue();
                     Map<String, Map<String, Variant<?>>> serviceProperties = objects
                             .entrySet()
                             .stream()
@@ -113,10 +137,14 @@ public class GVH5075Client implements AutoCloseable {
                             .findFirst()
                             .map(f -> f.getValue())
                             .orElse(null);
+                    String serviceUUID = (String) serviceProperties.get(GattService1.class.getName()).get("UUID").getValue();
                     DBusPath devicePath = (DBusPath) serviceProperties.get(GattService1.class.getName()).get("Device").getValue();
                     if (path.getPath().equals(devicePath.getPath())) {
                         GattCharacteristic1 char1 = connection.getRemoteObject(BLUEZ_BUSNAME, e.getKey(), GattCharacteristic1.class);
-                        deviceCharacteristics.put(char1.getUUID(), char1);
+                        deviceCharacteristics.put(
+                                new CharAddr(serviceUUID, char1.getUUID()),
+                                char1
+                        );
                     }
                 }
             }
@@ -127,10 +155,10 @@ public class GVH5075Client implements AutoCloseable {
             }
         }
 
-        deviceCharacteristic = deviceCharacteristics.get(UUID_DEVICE);
-        dataCharacteristic = deviceCharacteristics.get(UUID_DATA);
-        commandCharacteristic = deviceCharacteristics.get(UUID_COMMAND);
-        nameCharacteristic = deviceCharacteristics.get(UUID_NAME);
+        deviceCharacteristic = deviceCharacteristics.get(ADDR_DEVICE);
+        dataCharacteristic = deviceCharacteristics.get(ADDR_DATA);
+        commandCharacteristic = deviceCharacteristics.get(ADDR_COMMAND);
+        nameCharacteristic = deviceCharacteristics.get(ADDR_NAME);
 
         deviceValueListenerRegistration = connection.addSigHandler(Properties.PropertiesChanged.class, deviceCharacteristic, deviceValueListener);
         dataValueListenerRegistration = connection.addSigHandler(Properties.PropertiesChanged.class, dataCharacteristic, dataValueListener);
@@ -139,7 +167,64 @@ public class GVH5075Client implements AutoCloseable {
         deviceCharacteristic.StartNotify();
         dataCharacteristic.StartNotify();
         commandCharacteristic.StartNotify();
+
+        if (deviceCharacteristics.containsKey(ADDR_AUTH_NOTIFY) && deviceCharacteristics.containsKey(ADDR_AUTH_WRITE)) {
+            GattCharacteristic1 authNotifyCharacteristic = deviceCharacteristics.get(ADDR_AUTH_NOTIFY);
+            GattCharacteristic1 authWriteCharacteristic = deviceCharacteristics.get(ADDR_AUTH_WRITE);
+
+            connectionEncryption = encryptionHandshake(connection, authNotifyCharacteristic, authWriteCharacteristic);
+        } else {
+            connectionEncryption = null;
+        }
+
     }
+
+    private EncryptionHelper encryptionHandshake(DBusConnection connection1, GattCharacteristic1 authNotifyCharacteristic, GattCharacteristic1 authWriteCharacteristic) throws Exception {
+        ValueListener authNotifyListener = new ValueListener("AUTH NOTIFY");
+        try (AutoCloseable reg = connection1.addSigHandler(Properties.PropertiesChanged.class, authNotifyCharacteristic, authNotifyListener)) {
+            authNotifyCharacteristic.StartNotify();
+
+            EncryptionHelper pskEncryption = new EncryptionHelper(PSK);
+
+            byte[] tx1 = createTxPacket((byte) 1);
+            byte[] encryptedTx1 = pskEncryption.encrypt(tx1);
+
+            byte[] tx2 = createTxPacket((byte) 2);
+            byte[] encryptedTx2 = pskEncryption.encrypt(tx2);
+
+            LOG.log(Level.DEBUG, () -> "Sending TX1: " + HexFormat.ofDelimiter(" ").formatHex(tx1));
+            Future<Object> result = authNotifyListener.getNextValue();
+            authWriteCharacteristic.WriteValue(encryptedTx1, Map.of("type", new Variant<>("command")));
+            byte[] rx1 = pskEncryption.decrypt(toByteArray((List<Byte>) result.get()));
+            LOG.log(Level.DEBUG, () -> "Received as RX1: " + HexFormat.ofDelimiter(" ").formatHex(rx1));
+            if(rx1[0] != ((byte) 0xE7) || rx1[1] != ((byte) 0x01)) {
+                throw new IllegalStateException("Encryption Handshake failed");
+            }
+            byte[] sessionKey = Arrays.copyOfRange(rx1, 2, 18);
+            LOG.log(Level.DEBUG, () -> "Sending TX2: " + HexFormat.ofDelimiter(" ").formatHex(tx2));
+            result = authNotifyListener.getNextValue();
+            authWriteCharacteristic.WriteValue(encryptedTx2, Map.of("type", new Variant<>("command")));
+            byte[] rx2 = pskEncryption.decrypt(toByteArray((List<Byte>) result.get()));
+            LOG.log(Level.DEBUG, () -> "Received as RX1: " + HexFormat.ofDelimiter(" ").formatHex(rx2));
+            if (rx2[0] != ((byte) 0xE7) || rx2[1] != ((byte) 0x02)) {
+                throw new IllegalStateException("Encryption Handshake failed (2)");
+            }
+            return new EncryptionHelper(sessionKey);
+        } finally {
+            authNotifyCharacteristic.StopNotify();
+        }
+    }
+
+    public byte[] createTxPacket(byte phase) {
+        byte[] tx = new byte[20];
+        tx[0] = (byte) 0xE7;
+        tx[1] = phase;
+        for (int i = 0; i < (tx.length - 1); i++) {
+            tx[19] ^= tx[i];
+        }
+        return tx;
+    }
+
 
     public String getName() throws TimeoutException, InterruptedException, ExecutionException {
         return new String(nameCharacteristic.ReadValue(Map.of()));
@@ -201,7 +286,7 @@ public class GVH5075Client implements AutoCloseable {
         Object res = result.get(5, TimeUnit.SECONDS);
         byte[] measurement = null;
         if (res instanceof List l && !l.isEmpty() && l.get(0) instanceof Byte) {
-            measurement = toByteArray((List<Byte>) l);
+            measurement = decrypt(toByteArray((List<Byte>) l));
         }
         checkResult(REQUEST_CURRENT_MEASUREMENT, measurement);
         return Measurement.fromData(measurement);
@@ -228,7 +313,7 @@ public class GVH5075Client implements AutoCloseable {
                     res = result.get(10, TimeUnit.SECONDS);
                     int expectedCount = 0;
                     if (res instanceof List l && (!l.isEmpty()) && l.get(0) instanceof Byte) {
-                        byte[] data = toByteArray((List<Byte>) l);
+                        byte[] data = decrypt(toByteArray((List<Byte>) l));
                         expectedCount = ByteBuffer.wrap(data, 2, 2).getShort();
                     }
 
@@ -237,7 +322,7 @@ public class GVH5075Client implements AutoCloseable {
                         throw new IllegalStateException("Got: " + resultData.size() + " / " + expectedCount);
                     }
                     resultData.forEach(c -> {
-                        byte[] row = toByteArray((List<Byte>) c);
+                        byte[] row = decrypt(toByteArray((List<Byte>) c));
                         measurements.addAll(HistoryMeasurement.fromData(odt, row));
                     });
                     break;
@@ -253,12 +338,15 @@ public class GVH5075Client implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        deviceCharacteristic.StopNotify();
-        dataCharacteristic.StopNotify();
-        commandCharacteristic.StopNotify();
-        commandValueListenerRegistration.close();
-        dataValueListenerRegistration.close();
-        deviceValueListenerRegistration.close();
+        try (
+                deviceValueListenerRegistration;
+                dataValueListenerRegistration;
+                commandValueListenerRegistration
+        ) {
+            deviceCharacteristic.StopNotify();
+            dataCharacteristic.StopNotify();
+            commandCharacteristic.StopNotify();
+        }
         dev.Disconnect();
     }
 
@@ -268,7 +356,7 @@ public class GVH5075Client implements AutoCloseable {
             Future<Object> result = deviceValueListener.getNextValue();
             sendCommand(deviceCharacteristic, command);
             try {
-                byte[] res = toByteArray((List<Byte>) result.get(5, TimeUnit.SECONDS));
+                byte[] res = decrypt(toByteArray((List<Byte>) result.get(5, TimeUnit.SECONDS)));
                 checkResult(command, res);
                 return res;
             } catch (TimeoutException ex) {
@@ -278,7 +366,7 @@ public class GVH5075Client implements AutoCloseable {
         throw new IllegalStateException("Maximum retries exceeded: " + MAX_TRIES);
     }
 
-    private static void sendCommand(GattCharacteristic1 char1, byte[]... commands) {
+    private void sendCommand(GattCharacteristic1 char1, byte[]... commands) {
         int requiredLength = 0;
         for(byte[] command: commands) {
             requiredLength += command.length;
@@ -295,13 +383,20 @@ public class GVH5075Client implements AutoCloseable {
         }
         request[request.length - 1] = checksum;
         LOG.log(System.Logger.Level.DEBUG, () -> "Send >>> " + HexFormat.of().withDelimiter(" ").formatHex(request));
-        char1.WriteValue(request, Map.of("type", new Variant<>("request")));
+        byte[] requestEncrypted;
+        if (connectionEncryption != null) {
+            requestEncrypted = connectionEncryption.encrypt(request);
+            LOG.log(System.Logger.Level.DEBUG, () -> "Send >>> " + HexFormat.of().withDelimiter(" ").formatHex(requestEncrypted));
+        } else {
+            requestEncrypted = request; // No encryption for older devices/firmwares
+        }
+        char1.WriteValue(requestEncrypted, Map.of("type", new Variant<>("request")));
     }
 
     private void sendUpdate(byte[] command, byte[] argument) throws InterruptedException, ExecutionException, TimeoutException {
         Future<Object> result = deviceValueListener.getNextValue();
         sendCommand(deviceCharacteristic, command, argument);
-        byte[] res = toByteArray((List<Byte>) result.get(5, TimeUnit.SECONDS));
+        byte[] res = decrypt(toByteArray((List<Byte>) result.get(5, TimeUnit.SECONDS)));
         checkResult(command, res);
     }
 
@@ -312,4 +407,26 @@ public class GVH5075Client implements AutoCloseable {
             throw new IllegalStateException("Did not receive confirmation expected. Prefix match: " + format.formatHex(command) + " expected in " + format.formatHex(res));
         }
     }
+
+    /**
+     * Decrypt the provided packet input, if encryption is enabled
+     *
+     * @param input
+     * @return
+     */
+    private byte[] decrypt(byte[] input) {
+        if(input == null) {
+            return null;
+        }
+        if(connectionEncryption != null) {
+            return connectionEncryption.decrypt(input);
+        } else {
+            return input;
+        }
+    }
+
+    /**
+     * UUID Pair to identify characteristic
+     */
+    private record CharAddr(String serice, String characteristic) {}
 }

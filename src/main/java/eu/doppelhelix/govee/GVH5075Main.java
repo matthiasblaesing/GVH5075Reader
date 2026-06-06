@@ -20,7 +20,10 @@
  */
 
 /**
- * Java Implementierung auf Basis von https://github.com/Heckie75/govee-h5075-thermo-hygrometer/tree/main
+ * Java Implementierung auf Basis von_
+ * - https://github.com/Heckie75/govee-h5075-thermo-hygrometer/tree/main
+ * - https://github.com/NHaag87/govee-api/blob/main/API_documentation/H5105_protocol.md
+ * - https://github.com/wcbonner/GoveeBTTempLogger/tree/master
  */
 
 package eu.doppelhelix.govee;
@@ -64,8 +67,8 @@ public class GVH5075Main {
 //                client.setAlarmHumidity(new Alarm(false, -5.5, 23.5));
 //                client.setOffsetHumidity(0);
 //                client.setOffsetTemperature(0);
-//                dumpInfo(client);
-                dumpCurrentMeasurements(client);
+                dumpInfo(client);
+//                dumpCurrentMeasurements(client);
 //                dumpHistoricMeasurements(client);
             }
 
@@ -88,8 +91,7 @@ public class GVH5075Main {
             ad.StartDiscovery();
         });
 
-        List<DeviceAddress> goveeDevices = new ArrayList<>();
-        while (goveeDevices.isEmpty() && bluetoothAdapter.stream().allMatch(ad -> ad.isDiscovering())) {
+        while (bluetoothAdapter.stream().allMatch(ad -> ad.isDiscovering())) {
             Thread.sleep(100);
             for (Entry<DBusPath, Map<String, Map<String, Variant<?>>>> e : objectManager.GetManagedObjects().entrySet()) {
                 if (e.getValue().containsKey(Device1.class.getName())) {
@@ -129,13 +131,13 @@ public class GVH5075Main {
 
     private static void dumpInfo(GVH5075Client client) throws ExecutionException, InterruptedException, TimeoutException {
         System.out.printf("Name:              %s%n", client.getName());
-        System.out.printf("Battery:           %d %%%n", client.getBatteryLevel());
-        System.out.printf("Hardware-Revision: %s%n", client.getHardwareRevision());
-        System.out.printf("Firmware-Revision: %s%n", client.getFirmwareRevision());
         System.out.printf("Alarm Humidity:    %s%n", client.getAlarmHumidity());
         System.out.printf("Alarm Temperatur:  %s%n", client.getAlarmTemperature());
         System.out.printf("Offset Humidity:   %.2f%n", client.getOffsetHumitidy());
         System.out.printf("Offset Temperatur  %.2f%n", client.getOffsetTemperature());
+        System.out.printf("Hardware-Revision: %s%n", client.getHardwareRevision());
+        System.out.printf("Firmware-Revision: %s%n", client.getFirmwareRevision());
+        System.out.printf("Battery:           %d %%%n", client.getBatteryLevel());
     }
 
 
