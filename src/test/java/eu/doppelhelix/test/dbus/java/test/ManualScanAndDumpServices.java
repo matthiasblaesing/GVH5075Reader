@@ -20,10 +20,8 @@
  */
 package eu.doppelhelix.test.dbus.java.test;
 
-import eu.doppelhelix.govee.GVH5075Main;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import org.bluez.Adapter1;
@@ -56,28 +54,30 @@ public class ManualScanAndDumpServices {
             Map<String, Map<String, Variant<?>>> services = new HashMap<>();
             Map<String, Map<String, Map<String, Variant<?>>>> characteristics = new HashMap<>();
 
-            for (int i = 0; i < 1000; i++) {
-                Map<DBusPath, Map<String, Map<String, Variant<?>>>> objects = objectManager.GetManagedObjects();
-                for (Map.Entry<DBusPath, Map<String, Map<String, Variant<?>>>> e : objects.entrySet()) {
-                    if (e.getValue().containsKey(GattCharacteristic1.class.getName())) {
-                        Map<String, Variant<?>> characteristicData = e.getValue().get(GattCharacteristic1.class.getName());
-                        DBusPath servicePath = (DBusPath) characteristicData.get("Service").getValue();
-                        Map<String, Map<String, Variant<?>>> serviceProperties = objects
-                                .entrySet()
-                                .stream()
-                                .filter(f -> servicePath.getPath().equals(f.getKey().getPath()))
-                                .findFirst()
-                                .map(f -> f.getValue())
-                                .orElse(null);
-                        DBusPath devicePath = (DBusPath) serviceProperties.get(GattService1.class.getName()).get("Device").getValue();
-                        if (path.getPath().equals(devicePath.getPath())) {
-                            Map<String, Variant<?>> serviceProps = serviceProperties.get(GattService1.class.getName());
-                            String serviceUUID = serviceProps.get("UUID").toString();
-                            services.put(serviceUUID, serviceProps);
-                            characteristics
-                                    .computeIfAbsent(serviceUUID, (s) -> new HashMap<String, Map<String, Variant<?>>>())
-                                    .put(characteristicData.get("UUID").toString(), characteristicData);
-                        }
+            while(! dev.isServicesResolved()) {
+                Thread.sleep(100);
+            }
+
+            Map<DBusPath, Map<String, Map<String, Variant<?>>>> objects = objectManager.GetManagedObjects();
+            for (Map.Entry<DBusPath, Map<String, Map<String, Variant<?>>>> e : objects.entrySet()) {
+                if (e.getValue().containsKey(GattCharacteristic1.class.getName())) {
+                    Map<String, Variant<?>> characteristicData = e.getValue().get(GattCharacteristic1.class.getName());
+                    DBusPath servicePath = (DBusPath) characteristicData.get("Service").getValue();
+                    Map<String, Map<String, Variant<?>>> serviceProperties = objects
+                            .entrySet()
+                            .stream()
+                            .filter(f -> servicePath.getPath().equals(f.getKey().getPath()))
+                            .findFirst()
+                            .map(f -> f.getValue())
+                            .orElse(null);
+                    DBusPath devicePath = (DBusPath) serviceProperties.get(GattService1.class.getName()).get("Device").getValue();
+                    if (path.getPath().equals(devicePath.getPath())) {
+                        Map<String, Variant<?>> serviceProps = serviceProperties.get(GattService1.class.getName());
+                        String serviceUUID = serviceProps.get("UUID").toString();
+                        services.put(serviceUUID, serviceProps);
+                        characteristics
+                                .computeIfAbsent(serviceUUID, (s) -> new HashMap<String, Map<String, Variant<?>>>())
+                                .put(characteristicData.get("UUID").toString(), characteristicData);
                     }
                 }
             }

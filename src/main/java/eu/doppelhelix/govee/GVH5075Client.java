@@ -121,37 +121,35 @@ public class GVH5075Client implements AutoCloseable {
 
         dev.Connect();
 
+        while (!dev.isServicesResolved()) {
+            Thread.sleep(100);
+        }
+
         ObjectManager objectManager = connection.getRemoteObject(BLUEZ_BUSNAME, "/", ObjectManager.class);
 
         Map<CharAddr, GattCharacteristic1> deviceCharacteristics = new HashMap<>();
-        for (int i = 0; i < 2000; i++) {
-            Map<DBusPath, Map<String, Map<String, Variant<?>>>> objects = objectManager.GetManagedObjects();
-            for (Map.Entry<DBusPath, Map<String, Map<String, Variant<?>>>> e : objects.entrySet()) {
-                if (e.getValue().containsKey(GattCharacteristic1.class.getName())) {
-                    Map<String, Variant<?>> characteristicsData = e.getValue().get(GattCharacteristic1.class.getName());
-                    DBusPath servicePath = (DBusPath) characteristicsData.get("Service").getValue();
-                    Map<String, Map<String, Variant<?>>> serviceProperties = objects
-                            .entrySet()
-                            .stream()
-                            .filter(f -> servicePath.getPath().equals(f.getKey().getPath()))
-                            .findFirst()
-                            .map(f -> f.getValue())
-                            .orElse(null);
-                    String serviceUUID = (String) serviceProperties.get(GattService1.class.getName()).get("UUID").getValue();
-                    DBusPath devicePath = (DBusPath) serviceProperties.get(GattService1.class.getName()).get("Device").getValue();
-                    if (path.getPath().equals(devicePath.getPath())) {
-                        GattCharacteristic1 char1 = connection.getRemoteObject(BLUEZ_BUSNAME, e.getKey(), GattCharacteristic1.class);
-                        deviceCharacteristics.put(
-                                new CharAddr(serviceUUID, char1.getUUID()),
-                                char1
-                        );
-                    }
+
+        Map<DBusPath, Map<String, Map<String, Variant<?>>>> objects = objectManager.GetManagedObjects();
+        for (Map.Entry<DBusPath, Map<String, Map<String, Variant<?>>>> e : objects.entrySet()) {
+            if (e.getValue().containsKey(GattCharacteristic1.class.getName())) {
+                Map<String, Variant<?>> characteristicsData = e.getValue().get(GattCharacteristic1.class.getName());
+                DBusPath servicePath = (DBusPath) characteristicsData.get("Service").getValue();
+                Map<String, Map<String, Variant<?>>> serviceProperties = objects
+                        .entrySet()
+                        .stream()
+                        .filter(f -> servicePath.getPath().equals(f.getKey().getPath()))
+                        .findFirst()
+                        .map(f -> f.getValue())
+                        .orElse(null);
+                String serviceUUID = (String) serviceProperties.get(GattService1.class.getName()).get("UUID").getValue();
+                DBusPath devicePath = (DBusPath) serviceProperties.get(GattService1.class.getName()).get("Device").getValue();
+                if (path.getPath().equals(devicePath.getPath())) {
+                    GattCharacteristic1 char1 = connection.getRemoteObject(BLUEZ_BUSNAME, e.getKey(), GattCharacteristic1.class);
+                    deviceCharacteristics.put(
+                            new CharAddr(serviceUUID, char1.getUUID()),
+                            char1
+                    );
                 }
-            }
-            if (! deviceCharacteristics.keySet().containsAll(REQUIRED_CHARACTERISTICS)) {
-                Thread.sleep(100);
-            } else {
-                break;
             }
         }
 
