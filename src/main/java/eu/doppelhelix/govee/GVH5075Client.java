@@ -49,6 +49,7 @@ import org.freedesktop.dbus.interfaces.ObjectManager;
 import org.freedesktop.dbus.interfaces.Properties;
 import org.freedesktop.dbus.types.Variant;
 
+import static eu.doppelhelix.govee.Util.readIntHighbitSign;
 import static eu.doppelhelix.govee.Util.toByteArray;
 
 public class GVH5075Client implements AutoCloseable {
@@ -99,6 +100,8 @@ public class GVH5075Client implements AutoCloseable {
     // the PSK is used for the initial handshake, which results in a session
     // key that is ued for the further communication
     private static final byte[] PSK = "MakingLifeSmarte".getBytes(StandardCharsets.US_ASCII);
+
+    public static final int SCAN_COMPANY_IDENTIFIER = 60552;
 
     private final DBusConnection connection;
     private final Device1 dev;
@@ -400,6 +403,11 @@ public class GVH5075Client implements AutoCloseable {
         }
     }
 
+    public static ScanningData decodeScanningData(List manufacturerData) {
+        byte[] data = toByteArray(manufacturerData);
+        return ScanningData.fromData(data);
+    }
+
     /**
      * Decrypt the provided packet input, if encryption is enabled
      *
@@ -414,6 +422,18 @@ public class GVH5075Client implements AutoCloseable {
             return connectionEncryption.decrypt(input);
         } else {
             return input;
+        }
+    }
+
+    public record ScanningData(double temperature, double humidity, int batteryPercentage) {
+        public static ScanningData fromData(byte[] input) {
+            // First byte is null, followed by packed temperate + humidity data
+            // followed by battery percentage
+            int v1 = readIntHighbitSign(input, 1, 3);
+            int t1 = v1 / 1000;
+            int h1 = Math.abs(v1 % 1000);
+            int battery = input[4];
+            return new ScanningData(t1 / 10d, h1 / 10d, battery);
         }
     }
 

@@ -29,10 +29,14 @@
 package eu.doppelhelix.govee;
 
 import java.lang.System.Logger.Level;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import org.bluez.Adapter1;
@@ -43,6 +47,7 @@ import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder;
 import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.interfaces.ObjectManager;
 import org.freedesktop.dbus.messages.MethodCall;
+import org.freedesktop.dbus.types.UInt16;
 import org.freedesktop.dbus.types.Variant;
 
 public class GVH5075Main {
@@ -52,30 +57,33 @@ public class GVH5075Main {
     private static final String BLUEZ_BUSNAME = "org.bluez";
 
 
-
     public static void main(String[] args) throws Exception {
 
         LoggingConfiguration.init();
 //        LoggingConfiguration.enableDebugLogging();
 
+        boolean scanOnly = false;
+
         MethodCall.setDefaultTimeout(60_000);
         try (DBusConnection dbusConn = DBusConnectionBuilder.forSystemBus().build()) {
-            DBusPath goveeDevice = findGoveeDevices(dbusConn);
+            DBusPath goveeDevice = findGoveeDevices(dbusConn, scanOnly);
 
-            try (GVH5075Client client = new GVH5075Client(dbusConn, goveeDevice)) {
+            if (!scanOnly) {
+                try (GVH5075Client client = new GVH5075Client(dbusConn, goveeDevice)) {
 //                client.setAlarmHumidity(new Alarm(false, 20, 40));
 //                client.setAlarmHumidity(new Alarm(false, -5.5, 23.5));
 //                client.setOffsetHumidity(0);
 //                client.setOffsetTemperature(0);
-                dumpInfo(client);
-//                dumpCurrentMeasurements(client);
+                    dumpInfo(client);
+                    dumpCurrentMeasurements(client);
 //                dumpHistoricMeasurements(client);
+                }
             }
 
         }
     }
 
-    private static DBusPath findGoveeDevices(final DBusConnection dbusConn) throws DBusException, InterruptedException {
+    private static DBusPath findGoveeDevices(final DBusConnection dbusConn, boolean scanOnly) throws DBusException, InterruptedException {
 
         ObjectManager objectManager = dbusConn.getRemoteObject(BLUEZ_BUSNAME, "/", ObjectManager.class);
 
@@ -91,19 +99,53 @@ public class GVH5075Main {
             ad.StartDiscovery();
         });
 
+        Map<String, Instant> lastSeenValues = new HashMap<>();
+
         while (bluetoothAdapter.stream().allMatch(ad -> ad.isDiscovering())) {
             Thread.sleep(100);
             for (Entry<DBusPath, Map<String, Map<String, Variant<?>>>> e : objectManager.GetManagedObjects().entrySet()) {
                 if (e.getValue().containsKey(Device1.class.getName())) {
-                    Variant<?> name = e.getValue().get(Device1.class.getName()).get("Name");
-                    Variant<?> address = e.getValue().get(Device1.class.getName()).get("Address");
-                    if (name != null) {
-                        Object value = name.getValue();
-                        if (value instanceof String nameString) {
-                            if (nameString.startsWith("GVH5075")) {
-                                LOG.log(Level.DEBUG, () -> "Found GVH5075 device " + address.getValue() + " => " + nameString);
-                                return e.getKey();
+                    Map<String, Variant<?>> device1Data = e.getValue().get(Device1.class.getName());
+                    Variant<?> nameVariant = device1Data.get("Name");
+                    Variant<?> addressVariant = device1Data.get("Address");
+//                    Variant<?> address = e.getValue().get(Device1.class.getName()).get("Address");
+
+                    if (nameVariant != null
+                            && addressVariant != null
+                            && nameVariant.getValue() instanceof String name
+                            && addressVariant.getValue() instanceof String address
+                            && name.startsWith("GVH5075")) {
+
+                        if(! scanOnly) {
+                            return e.getKey();
+                        }
+
+                        Instant lastSeen = lastSeenValues.get(address);
+                        if (lastSeen == null || Instant.now().minus(10, ChronoUnit.SECONDS).isAfter(lastSeen)) {
+                            Short rssi = Optional
+                                    .ofNullable(device1Data.get("RSSI"))
+                                    .map(variant -> (Short) variant.getValue())
+                                    .orElse(null);
+
+                            GVH5075Client.ScanningData scanningData = null;
+
+                            if(device1Data.get("ManufacturerData") instanceof Variant mdVariant
+                                    && mdVariant.getValue() instanceof Map md
+                                    && md.get(new UInt16(GVH5075Client.SCAN_COMPANY_IDENTIFIER)) instanceof Variant goveeDataVariant
+                                    && goveeDataVariant.getValue() instanceof List listData) {
+                                scanningData = GVH5075Client.decodeScanningData(listData);
                             }
+
+                            System.out.printf("%s\t%s\t%s\t%s°C\t%s%%\t%s%%%n",
+                                    name,
+                                    address,
+                                    rssi == null ? "-" : rssi,
+                                    scanningData != null ? scanningData.temperature() : "-",
+                                    scanningData != null ? scanningData.humidity() : "-",
+                                    scanningData != null ? scanningData.batteryPercentage() : "-"
+                            );
+
+                            lastSeenValues.put(address, Instant.now());
                         }
                     }
                 }

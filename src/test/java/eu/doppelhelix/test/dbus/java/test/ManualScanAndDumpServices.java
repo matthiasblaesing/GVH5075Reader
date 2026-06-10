@@ -47,6 +47,8 @@ public class ManualScanAndDumpServices {
 
             Device1 dev = connection.getRemoteObject(BLUEZ_BUSNAME, path, Device1.class);
 
+            System.out.println(dev);
+
             dev.Connect();
 
             ObjectManager objectManager = connection.getRemoteObject(BLUEZ_BUSNAME, "/", ObjectManager.class);
